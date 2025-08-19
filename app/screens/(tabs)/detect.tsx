@@ -2,8 +2,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as React from 'react';
-import { Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Button, Card, DefaultTheme, IconButton, Provider as PaperProvider, Paragraph, Title } from 'react-native-paper';
+import { apiService } from '../../../services/apiService';
 
 const plantTheme = {
   ...DefaultTheme,
@@ -22,6 +23,7 @@ export default function Detect() {
   const [loading, setLoading] = React.useState(false);
   const [result, setResult] = React.useState<any>(null);
   const [modalVisible, setModalVisible] = React.useState(false);
+  const [useOffline, setUseOffline] = React.useState(false);
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -52,38 +54,34 @@ export default function Detect() {
   };
 
   const detectDisease = async () => {
-    if (!image) return;
-    let timeoutId: any = null;
+    if (!image) {
+      Alert.alert('Error', 'Please select an image first');
+      return;
+    }
+
+    if (useOffline) {
+      Alert.alert('Offline Mode', 'Offline detection is not available in this build.');
+      return;
+    }
+
+    setLoading(true);
     try {
-      setLoading(true);
-      setResult(null);
-      const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('Request timed out. Please try again.')), 15000);
-      });
-      const response = await fetch(image);
-      const blob = await response.blob();
-      const formData = new FormData();
-      formData.append('image', {
-        uri: image,
-        name: 'image.jpg',
-        type: 'image/jpeg',
-      } as any);
-      const API_URL = 'http://192.168.219.26:5000/predict';
-      const fetchPromise = fetch(API_URL, {
-        method: 'POST',
-        body: formData,
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-      const result = await Promise.race([fetchPromise, timeoutPromise]);
-      if (timeoutId) clearTimeout(timeoutId);
-      const data = await (result as Response).json();
-      if (!(result as Response).ok) throw new Error(data.error || 'Unknown error');
-      handleResult(data);
-    } catch (error: any) {
-      if (timeoutId) clearTimeout(timeoutId);
-      alert(error.message.includes('Network request failed') ? 'Network error: Check if the backend server is running.' : error.message);
+      const response = await apiService.predictPlantDisease(image);
+      
+      if (response.success && response.data) {
+        handleResult(response.data);
+      } else {
+        Alert.alert(
+          'Detection Failed', 
+          response.error || 'Unable to analyze the image. Please check your connection and try again.'
+        );
+      }
+    } catch (error) {
+      console.error('Detection error:', error);
+      Alert.alert(
+        'Connection Error', 
+        'Unable to connect to the detection service. Please ensure the backend server is running and try again.'
+      );
     } finally {
       setLoading(false);
     }
@@ -99,6 +97,16 @@ export default function Detect() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <View style={styles.container}>
           <Title style={styles.title}>Plant Disease Diagnosis</Title>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+            <Text>Offline Mode</Text>
+            <TouchableOpacity
+              style={{ marginLeft: 8 }}
+              onPress={() => setUseOffline((prev) => !prev)}
+            >
+              <Ionicons name={useOffline ? 'toggle' : 'toggle-outline'} size={32} color="#6BCB77" />
+            </TouchableOpacity>
+            <Text style={{ marginLeft: 8 }}>{useOffline ? 'ON' : 'OFF'}</Text>
+          </View>
           {image ? (
             <Card style={styles.card}>
               <Card.Content style={{ alignItems: 'center' }}>

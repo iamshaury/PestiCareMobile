@@ -1,13 +1,9 @@
 # app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import tensorflow as tf
-from tensorflow import keras
 from PIL import Image
 import numpy as np
 import json
-import os
-import io
 import logging
 
 # Configure logging
@@ -18,14 +14,22 @@ app = Flask(__name__)
 CORS(app)
 
 try:
-    model = keras.models.load_model('plant_disease_model.h5')
+    import tflite_runtime.interpreter as tflite
+    interpreter = tflite.Interpreter(model_path='plant_disease_model.tflite')
+    interpreter.allocate_tensors()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
     with open('class_indices.json') as f:
         class_indices = json.load(f)
     labels = {v: k for k, v in class_indices.items()}
-    logger.info("Model and class indices loaded successfully")
+    logger.info("TFLite model and class indices loaded successfully")
 except Exception as e:
-    logger.error(f"Error loading model or class indices: {str(e)}")
+    logger.error(f"Error loading TFLite model or class indices: {str(e)}")
     raise
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy', 'message': 'Plant Disease Detection API is running'}), 200
 
 simple_labels = {
     "Pepper__bell___Bacterial_spot": {
@@ -161,38 +165,27 @@ def predict():
         logger.info(f"Received image file: {file.filename}")
 
         try:
-            # Process image
             img = Image.open(file.stream)
             logger.info(f"Image opened successfully. Size: {img.size}, Mode: {img.mode}")
-            
+
             img = img.convert('RGB')
-            logger.info("Image converted to RGB")
-            
             img = img.resize((128, 128))
-            logger.info("Image resized to 128x128")
-            
             arr = np.array(img) / 255.0
-            logger.info(f"Image converted to array. Shape: {arr.shape}, Range: [{arr.min()}, {arr.max()}]")
-            
             arr = arr.reshape((1, 128, 128, 3))
-            logger.info(f"Array reshaped. New shape: {arr.shape}")
-            
-            # Make prediction
-            pred = model.predict(arr)
-            logger.info(f"Prediction completed. Shape: {pred.shape}")
-            
+
+            interpreter.set_tensor(input_details[0]['index'], arr.astype(np.float32))
+            interpreter.invoke()
+            pred = interpreter.get_tensor(output_details[0]['index'])
+
             class_idx = int(np.argmax(pred))
             class_name = labels[class_idx]
             confidence = float(np.max(pred))
-            logger.info(f"Class index: {class_idx}, Class name: {class_name}, Confidence: {confidence}")
-            
+
             simple = simple_labels.get(class_name, {"name": class_name, "advice": ""})
-            
-            # Format the disease name for display
             disease_name = class_name.replace('__', ' - ').replace('_', ' ')
             if disease_name.endswith('healthy'):
                 disease_name = "Healthy Plant"
-            
+
             response = {
                 'disease_name': disease_name,
                 'class': class_name,
@@ -207,15 +200,15 @@ def predict():
             }
             logger.info(f"Prediction successful: {disease_name} with confidence {confidence}")
             return jsonify(response)
-            
+
         except Exception as e:
             logger.error(f"Error during image processing or prediction: {str(e)}")
             return jsonify({'error': f'Image processing error: {str(e)}'}), 500
-            
+
     except Exception as e:
         logger.error(f"Error during request handling: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     logger.info("Starting Flask server...")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
